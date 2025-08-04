@@ -1,0 +1,10 @@
+# venv file
+bindas_env/
+
+# Environment files
+.env
+
+# VSCode settings
+.vscode/
+
+__pycache__/
