@@ -101,8 +101,12 @@ class PrimaryKeyDisplay(BaseModel):
     displayText: str
 
 class UpdateRelationshipsRequest(BaseModel):
-    selectedPrimaryKeys: List[str]
-    selectedRelationships: List[str]
+    # deleteTable: List[str]
+    # selectedPrimaryKeys: List[str]
+    # selectedRelationships: List[str]
+    deleteTable: Optional[List[str]] = []
+    selectedPrimaryKeys: Optional[List[str]] = []
+    selectedRelationships: Optional[List[str]] = []
 
 class RemoveRelationshipRequest(BaseModel):
     relationshipId: str

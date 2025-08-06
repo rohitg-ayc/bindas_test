@@ -189,7 +189,7 @@ async def select_database(
         if not userserverdetails:
             return StandardResponse(success=False,
                                     status_code=400,
-                                    message="No database selected or connection lost",
+                                    message="Connection lost",
                                     data={})
         
         # fernet = Fernet(ENCRYPTION_KEY.encode())
@@ -297,8 +297,8 @@ async def fetch_relationship_from_db(current_user: dict = Depends(get_current_us
     try:
         
         userserverdetails = db.query(UserServerDetails).filter(UserServerDetails.user_id == current_user["user_id"],
-                                                               UserServerDetails.is_active == True,
-                                                               UserServerDetails.session_expiry > datetime.now()).first()
+                                                               UserServerDetails.is_active == True).first()
+                                                            #    UserServerDetails.session_expiry > datetime.now()
 
         if not userserverdetails:
             return StandardResponse(success=False,
@@ -315,6 +315,8 @@ async def fetch_relationship_from_db(current_user: dict = Depends(get_current_us
         duckdb_manager = DuckDBProjectManager(encrypted_duckdb_path, ENCRYPTION_KEY)
         # duckdb_manager.decrypt_project_file(encrypted_duckdb_path)
         table_data_dict = duckdb_manager.fetch_transformed_tables(db_path=encrypted_duckdb_path)
+        
+        print(f"+++++++++++++++++++++>The keys names in the fetch relationship option {list(table_data_dict.keys())}")
             
         # Fetch metadata and relationships
         temp_data = duckdb_manager.fetch_temp_data(db_path=encrypted_duckdb_path)
@@ -399,7 +401,8 @@ async def fetch_relationship_from_db(current_user: dict = Depends(get_current_us
                 "svg": svg_data,
                 "relationships": relationship_display,
                 "primaryKeys": primary_keys_display,
-                "tables": list(table_data_dict.keys())
+                "tables": [key.replace("transformed_", "", 1) for key in table_data_dict.keys()]
+                #list(table_data_dict.keys())
             },
             message="Relationships fetched successfully"
         )
@@ -412,25 +415,41 @@ async def fetch_relationship_from_db(current_user: dict = Depends(get_current_us
         
         
 @router.post("/detect_relationships", response_model=StandardResponse)
-async def detect_relationships(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def detect_relationships(current_user: dict = Depends(get_current_user),
+                               db: Session = Depends(get_db)):
+    
     try:
-        userserverdetails = db.query(UserServerDetails).filter(
-            UserServerDetails.user_id == current_user["user_id"],
-            UserServerDetails.is_active == True,
-            UserServerDetails.session_expiry > datetime.utcnow()
-        ).first()
-        if not userserverdetails or not userserverdetails.selected_db:
+        
+        userserverdetails = db.query(UserServerDetails).filter(UserServerDetails.user_id == current_user["user_id"],
+                                                               UserServerDetails.is_active == True).first()
+                                                            #    UserServerDetails.session_expiry > datetime.now()
+                                                            
+        
+        if not userserverdetails:
             return StandardResponse(success=False, status_code=400, message="No database selected or connection lost", data={})
 
+        # # Load DuckDB
+        # encrypted_duckdb_path = decrypt_data(userserverdetails.encrypted_duckdb_path)
+        # duckdb_path = encrypted_duckdb_path.replace(".enc", "")
+        # duckdb_manager = DuckDBProjectManager(duckdb_path, ENCRYPTION_KEY)
+        # duckdb_manager.decrypt_project_file(encrypted_duckdb_path)
+        # table_data_dict = duckdb_manager.fetch_all_tables()
+        
         # Load DuckDB
         encrypted_duckdb_path = decrypt_data(userserverdetails.encrypted_duckdb_path)
-        duckdb_path = encrypted_duckdb_path.replace(".enc", "")
-        duckdb_manager = DuckDBProjectManager(duckdb_path, ENCRYPTION_KEY)
-        duckdb_manager.decrypt_project_file(encrypted_duckdb_path)
-        table_data_dict = duckdb_manager.fetch_all_tables()
+        # duckdb_path = encrypted_duckdb_path.replace(".enc", "")
+        
+        print("============================> encrypted_duckdb_path", encrypted_duckdb_path)
+        
+        duckdb_manager = DuckDBProjectManager(encrypted_duckdb_path, ENCRYPTION_KEY)
+        # duckdb_manager.decrypt_project_file(encrypted_duckdb_path)
+        table_data_dict = duckdb_manager.fetch_transformed_tables(db_path=encrypted_duckdb_path)
+        
+        # Remove the "transformed_" prefix from each key
+        table_data_dict = {key.replace("transformed_", "", 1): value
+                            for key, value in table_data_dict.items()}
+        
+        print(f"+++++++++++++++++++++>The keys names in the detect relationship option {list(table_data_dict.keys())}")
 
         # Detect relationships
         sorted_table_data_dict = RelationDetector.sort_tables_by_size(table_data_dict)
@@ -441,15 +460,15 @@ async def detect_relationships(
         )
         relationships = RelationDetector.detect_relationships(table_data_dict, final_primary_keys, final_foreign_keys)
 
-        # Update DuckDB
-        duckdb_manager.conn.execute("DELETE FROM metadata_tables")
-        duckdb_manager.store_metadata(table_data_dict, final_primary_keys, final_foreign_keys)
-        encrypted_duckdb_path = duckdb_manager.encrypt_project_file()
-        duckdb_manager.close()
+        # # Update DuckDB
+        # duckdb_manager.conn.execute("DELETE FROM metadata_tables")
+        # duckdb_manager.store_metadata(table_data_dict, final_primary_keys, final_foreign_keys)
+        # encrypted_duckdb_path = duckdb_manager.encrypt_project_file()
+        # duckdb_manager.close()
 
-        # Update UserServerDetails
-        userserverdetails.encrypted_duckdb_path = encrypt_data(encrypted_duckdb_path)
-        db.commit()
+        # # Update UserServerDetails
+        # userserverdetails.encrypted_duckdb_path = encrypt_data(encrypted_duckdb_path)
+        # db.commit()
 
         # Generate ER diagram
         graph = graphviz.Digraph(format="svg")
@@ -532,7 +551,8 @@ async def detect_relationships(
                 "primaryKeys": primary_keys_display,
                 "allPrimaryKeyOptions": all_pk_options,
                 "allRelationshipOptions": all_rel_options,
-                "tables": list(table_data_dict.keys())
+                "tables": [key.replace("transformed_", "", 1) for key in table_data_dict.keys()]
+                # list(table_data_dict.keys())
             },
             message="Relationships detected successfully"
         )
@@ -541,30 +561,52 @@ async def detect_relationships(
         return StandardResponse(success=False, status_code=500, message=f"Failed to detect relationships: {str(e)}", data={})
 
 @router.post("/update_detected_relationships", response_model=StandardResponse)
-async def update_detected_relationships(
-    data: UpdateRelationshipsRequest,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+async def update_detected_relationships(data: UpdateRelationshipsRequest,
+                                        current_user: dict = Depends(get_current_user),
+                                        db: Session = Depends(get_db)):
     try:
-        userserverdetails = db.query(UserServerDetails).filter(
-            UserServerDetails.user_id == current_user["user_id"],
-            UserServerDetails.is_active == True,
-            UserServerDetails.session_expiry > datetime.utcnow()
-        ).first()
-        if not userserverdetails or not userserverdetails.selected_db:
+        userserverdetails = db.query(UserServerDetails).filter(UserServerDetails.user_id == current_user["user_id"],
+                                                               UserServerDetails.is_active == True).first()
+                                                            #    UserServerDetails.session_expiry > datetime.now()
+                                                            
+        
+        if not userserverdetails:
             return StandardResponse(success=False, status_code=400, message="No database selected or connection lost", data={})
 
+        # # Load DuckDB
+        # encrypted_duckdb_path = decrypt_data(userserverdetails.encrypted_duckdb_path)
+        # duckdb_path = encrypted_duckdb_path.replace(".enc", "")
+        # duckdb_manager = DuckDBProjectManager(duckdb_path, ENCRYPTION_KEY)
+        # duckdb_manager.decrypt_project_file(encrypted_duckdb_path)
+        # table_data_dict = duckdb_manager.fetch_all_tables()
+        
         # Load DuckDB
         encrypted_duckdb_path = decrypt_data(userserverdetails.encrypted_duckdb_path)
-        duckdb_path = encrypted_duckdb_path.replace(".enc", "")
-        duckdb_manager = DuckDBProjectManager(duckdb_path, ENCRYPTION_KEY)
-        duckdb_manager.decrypt_project_file(encrypted_duckdb_path)
-        table_data_dict = duckdb_manager.fetch_all_tables()
+        # duckdb_path = encrypted_duckdb_path.replace(".enc", "")
+        
+        print("============================> encrypted_duckdb_path", encrypted_duckdb_path)
+        
+        duckdb_manager = DuckDBProjectManager(encrypted_duckdb_path, ENCRYPTION_KEY)
+        # duckdb_manager.decrypt_project_file(encrypted_duckdb_path)
+        table_data_dict = duckdb_manager.fetch_transformed_tables(db_path=encrypted_duckdb_path)
+        
+        # Remove the "transformed_" prefix from each key
+        table_data_dict = {key.replace("transformed_", "", 1): value
+                            for key, value in table_data_dict.items()}
+        
+        if data.deleteTable:
+            for i in data.deleteTable:
+                del table_data_dict[i]
+                print(f"Table {i} deleted.")
+                
+        sorted_table_data_dict = RelationDetector.sort_tables_by_size(table_data_dict)
 
-        # Update relationships
-        selected_pk, selected_ck, selected_comkey = RelationDetector.convert_options_to_dict(data.selectedPrimaryKeys)
-        selected_rel_dict = RelationDetector.convert_relationship_options_to_dict(data.selectedRelationships)
+        if data.selectedPrimaryKeys or data.selectedRelationships:
+            # Update relationships
+            selected_pk, selected_ck, selected_comkey = RelationDetector.convert_options_to_dict(data.selectedPrimaryKeys)
+            selected_rel_dict = RelationDetector.convert_relationship_options_to_dict(data.selectedRelationships)
+        else: 
+            primary_keys, composite_keys = RelationDetector.detect_candidate_primary_keys(sorted_table_data_dict, max_columns=2)
 
         # Generate ER diagram
         graph = graphviz.Digraph(format="svg")
@@ -589,24 +631,67 @@ async def update_detected_relationships(
                     graph.edge(parent, child_table, label=f"{relation_type}\n{fk_col}", color="blue")
         svg_data = graph.pipe(format="svg").decode('utf-8')
 
-        # Update DuckDB
-        sorted_table_data_dict = RelationDetector.sort_tables_by_size(table_data_dict)
+        # # Update DuckDB
+        # sorted_table_data_dict = RelationDetector.sort_tables_by_size(table_data_dict)
+        # foreign_keys, reference_count = RelationDetector.detect_foreign_keys(sorted_table_data_dict, selected_pk, selected_ck)
+        # final_primary_keys, final_foreign_keys = RelationDetector.finalize_primary_and_foreign_keys(
+        #     selected_pk, selected_ck, reference_count, foreign_keys, sorted_table_data_dict)
+        # updated_relationships = RelationDetector.detect_relationships(table_data_dict, final_primary_keys, final_foreign_keys)
+        
+        # Detect relationships
         foreign_keys, reference_count = RelationDetector.detect_foreign_keys(sorted_table_data_dict, selected_pk, selected_ck)
         final_primary_keys, final_foreign_keys = RelationDetector.finalize_primary_and_foreign_keys(
             selected_pk, selected_ck, reference_count, foreign_keys, sorted_table_data_dict
         )
-        updated_relationships = RelationDetector.detect_relationships(table_data_dict, final_primary_keys, final_foreign_keys)
-        duckdb_manager.conn.execute("DELETE FROM metadata_tables")
-        duckdb_manager.store_metadata(table_data_dict, final_primary_keys, final_foreign_keys)
-        encrypted_duckdb_path = duckdb_manager.encrypt_project_file()
-        duckdb_manager.close()
+        relationships = RelationDetector.detect_relationships(table_data_dict, final_primary_keys, final_foreign_keys)
+        
+        # duckdb_manager.conn.execute("DELETE FROM metadata_tables")
+        # duckdb_manager.store_metadata(table_data_dict, final_primary_keys, final_foreign_keys)
+        # encrypted_duckdb_path = duckdb_manager.encrypt_project_file()
+        # duckdb_manager.close()
 
-        # Update UserServerDetails
-        userserverdetails.encrypted_duckdb_path = encrypt_data(encrypted_duckdb_path)
-        db.commit()
+        # # Update UserServerDetails
+        # userserverdetails.encrypted_duckdb_path = encrypt_data(encrypted_duckdb_path)
+        # db.commit()
 
+        # relationship_display = []
+        # for parent, pk_dict in selected_rel_dict.items():
+        #     for pk, child_data in pk_dict.items():
+        #         for child_table, fk_col, relation_type in child_data:
+        #             rel_id = f"{parent}|{pk}|{child_table}|{fk_col}|{relation_type}"
+        #             relationship_display.append({
+        #                 "parent": parent,
+        #                 "primaryKey": pk,
+        #                 "childTable": child_table,
+        #                 "foreignKey": fk_col,
+        #                 "relationType": relation_type,
+        #                 "displayText": f"{parent} ({pk}) → {child_table} ({fk_col}) as ({relation_type})",
+        #                 "id": rel_id
+        #             })
+
+        # all_rel_options = []
+        # for parent, pk_dict in updated_relationships.items():
+        #     for pk, child_data in pk_dict.items():
+        #         for child_table, fk_col, rel_type in child_data:
+        #             rel_id = f"{parent}|{pk}|{child_table}|{fk_col}|{rel_type}"
+        #             all_rel_options.append({
+        #                 "label": f"{parent} ({pk}) → {child_table} ({fk_col}) as ({rel_type})",
+        #                 "value": f"{parent} ({pk}) → {child_table} ({fk_col}) as ({rel_type})",
+        #                 "id": rel_id
+        #             })
+
+        # return StandardResponse(
+        #     success=True,
+        #     data={
+        #         "svg": svg_data,
+        #         "relationships": relationship_display,
+        #         "allRelationshipOptions": all_rel_options,
+        #         "tables": [key.replace("transformed_", "", 1) for key in table_data_dict.keys()]
+        #     },
+        #     message="Relationships updated successfully"
+        # )
         relationship_display = []
-        for parent, pk_dict in selected_rel_dict.items():
+        for parent, pk_dict in relationships.items():
             for pk, child_data in pk_dict.items():
                 for child_table, fk_col, relation_type in child_data:
                     rel_id = f"{parent}|{pk}|{child_table}|{fk_col}|{relation_type}"
@@ -620,8 +705,32 @@ async def update_detected_relationships(
                         "id": rel_id
                     })
 
+        primary_keys_display = []
+        for table, keys in final_primary_keys.items():
+            if isinstance(keys, list):
+                for key in keys:
+                    primary_keys_display.append({
+                        "table": table,
+                        "key": key,
+                        "displayText": f"{table} → {key}"
+                    })
+            else:
+                primary_keys_display.append({
+                    "table": table,
+                    "key": keys,
+                    "displayText": f"{table} → {keys}"
+                })
+
+        all_pk_options = []
+        for parent_table, primary_key_list in (selected_pk | selected_ck).items():
+            for primary_key in primary_key_list:
+                all_pk_options.append({
+                    "label": f"{parent_table} → {primary_key}",
+                    "value": f"{parent_table} → {primary_key}"
+                })
+
         all_rel_options = []
-        for parent, pk_dict in updated_relationships.items():
+        for parent, pk_dict in relationships.items():
             for pk, child_data in pk_dict.items():
                 for child_table, fk_col, rel_type in child_data:
                     rel_id = f"{parent}|{pk}|{child_table}|{fk_col}|{rel_type}"
@@ -636,171 +745,175 @@ async def update_detected_relationships(
             data={
                 "svg": svg_data,
                 "relationships": relationship_display,
-                "allRelationshipOptions": all_rel_options
+                "primaryKeys": primary_keys_display,
+                "allPrimaryKeyOptions": all_pk_options,
+                "allRelationshipOptions": all_rel_options,
+                "tables": [key.replace("transformed_", "", 1) for key in table_data_dict.keys()]
+                # list(table_data_dict.keys())
             },
-            message="Relationships updated successfully"
+            message="Relationships detected successfully"
         )
 
     except Exception as e:
         return StandardResponse(success=False, status_code=500, message=f"Failed to update relationships: {str(e)}", data={})
 
-@router.post("/remove_relationship", response_model=StandardResponse)
-async def remove_relationship(
-    data: RemoveRelationshipRequest,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    try:
-        userserverdetails = db.query(UserServerDetails).filter(
-            UserServerDetails.user_id == current_user["user_id"],
-            UserServerDetails.is_active == True,
-            UserServerDetails.session_expiry > datetime.utcnow()
-        ).first()
-        if not userserverdetails or not userserverdetails.selected_db:
-            return StandardResponse(success=False, status_code=400, message="No database selected or connection lost", data={})
+# @router.post("/remove_relationship", response_model=StandardResponse)
+# async def remove_relationship(
+#     data: RemoveRelationshipRequest,
+#     current_user: dict = Depends(get_current_user),
+#     db: Session = Depends(get_db)
+# ):
+#     try:
+#         userserverdetails = db.query(UserServerDetails).filter(
+#             UserServerDetails.user_id == current_user["user_id"],
+#             UserServerDetails.is_active == True,
+#             UserServerDetails.session_expiry > datetime.utcnow()
+#         ).first()
+#         if not userserverdetails or not userserverdetails.selected_db:
+#             return StandardResponse(success=False, status_code=400, message="No database selected or connection lost", data={})
 
-        # Load DuckDB
-        encrypted_duckdb_path = decrypt_data(userserverdetails.encrypted_duckdb_path)
-        duckdb_path = encrypted_duckdb_path.replace(".enc", "")
-        duckdb_manager = DuckDBProjectManager(duckdb_path, ENCRYPTION_KEY)
-        duckdb_manager.decrypt_project_file(encrypted_duckdb_path)
-        table_data_dict = duckdb_manager.fetch_all_tables()
+#         # Load DuckDB
+#         encrypted_duckdb_path = decrypt_data(userserverdetails.encrypted_duckdb_path)
+#         duckdb_path = encrypted_duckdb_path.replace(".enc", "")
+#         duckdb_manager = DuckDBProjectManager(duckdb_path, ENCRYPTION_KEY)
+#         duckdb_manager.decrypt_project_file(encrypted_duckdb_path)
+#         table_data_dict = duckdb_manager.fetch_all_tables()
 
-        # Update relationships
-        relationship_id = data.relationshipId
-        parts = relationship_id.split('|')
-        if len(parts) != 5:
-            return StandardResponse(success=False, status_code=400, message="Invalid relationship ID format", data={})
-        parent, pk, child_table, fk_col, relation_type = parts
+#         # Update relationships
+#         relationship_id = data.relationshipId
+#         parts = relationship_id.split('|')
+#         if len(parts) != 5:
+#             return StandardResponse(success=False, status_code=400, message="Invalid relationship ID format", data={})
+#         parent, pk, child_table, fk_col, relation_type = parts
 
-        relationships_df = duckdb_manager.fetch_relationships()
-        relationships = {}
-        for _, row in relationships_df.iterrows():
-            p, p_pk, c_table, c_fk, r_type = row['source_table'], row['source_column'], row['target_table'], row['target_column'], row['relation_type']
-            if p not in relationships:
-                relationships[p] = {}
-            if p_pk not in relationships[p]:
-                relationships[p][p_pk] = []
-            relationships[p][p_pk].append((c_table, c_fk, r_type))
+#         relationships_df = duckdb_manager.fetch_relationships()
+#         relationships = {}
+#         for _, row in relationships_df.iterrows():
+#             p, p_pk, c_table, c_fk, r_type = row['source_table'], row['source_column'], row['target_table'], row['target_column'], row['relation_type']
+#             if p not in relationships:
+#                 relationships[p] = {}
+#             if p_pk not in relationships[p]:
+#                 relationships[p][p_pk] = []
+#             relationships[p][p_pk].append((c_table, c_fk, r_type))
 
-        if parent in relationships and pk in relationships[parent]:
-            child_data = relationships[parent][pk]
-            for i, (c_table, c_fk, c_rel) in enumerate(child_data):
-                if c_table == child_table and c_fk == fk_col and c_rel == relation_type:
-                    child_data.pop(i)
-                    break
-            if not child_data:
-                relationships[parent].pop(pk)
-            if not relationships[parent]:
-                relationships.pop(parent)
+#         if parent in relationships and pk in relationships[parent]:
+#             child_data = relationships[parent][pk]
+#             for i, (c_table, c_fk, c_rel) in enumerate(child_data):
+#                 if c_table == child_table and c_fk == fk_col and c_rel == relation_type:
+#                     child_data.pop(i)
+#                     break
+#             if not child_data:
+#                 relationships[parent].pop(pk)
+#             if not relationships[parent]:
+#                 relationships.pop(parent)
 
-        # Update DuckDB
-        duckdb_manager.update_relationships(relationships)
-        encrypted_duckdb_path = duckdb_manager.encrypt_project_file()
-        duckdb_manager.close()
+#         # Update DuckDB
+#         duckdb_manager.update_relationships(relationships)
+#         encrypted_duckdb_path = duckdb_manager.encrypt_project_file()
+#         duckdb_manager.close()
 
-        # Update UserServerDetails
-        userserverdetails.encrypted_duckdb_path = encrypt_data(encrypted_duckdb_path)
-        db.commit()
+#         # Update UserServerDetails
+#         userserverdetails.encrypted_duckdb_path = encrypt_data(encrypted_duckdb_path)
+#         db.commit()
 
-        # Generate ER diagram
-        metadata_df = duckdb_manager.fetch_metadata()
-        final_primary_keys = {}
-        for _, row in metadata_df[metadata_df['is_primary_key'] == True].iterrows():
-            table = row['table_name']
-            if table not in final_primary_keys:
-                final_primary_keys[table] = []
-            final_primary_keys[table].append(row['column_name'])
+#         # Generate ER diagram
+#         metadata_df = duckdb_manager.fetch_metadata()
+#         final_primary_keys = {}
+#         for _, row in metadata_df[metadata_df['is_primary_key'] == True].iterrows():
+#             table = row['table_name']
+#             if table not in final_primary_keys:
+#                 final_primary_keys[table] = []
+#             final_primary_keys[table].append(row['column_name'])
 
-        graph = graphviz.Digraph(format="svg")
-        graph.attr(rankdir="LR", size="12")
-        for table, df in table_data_dict.items():
-            label = f"<<TABLE BORDER='1' CELLBORDER='1' CELLSPACING='0'>"
-            label += f"<TR><TD BGCOLOR='lightblue' COLSPAN='2'><B>{table}</B></TD></TR>"
-            for col in df.columns:
-                dtype = str(df[col].dtype)
-                check_pk = final_primary_keys.get(table, [])
-                if len(check_pk) > 0 and isinstance(check_pk[0], tuple):
-                    check_pk = check_pk[0]
-                if col in check_pk:
-                    label += f"<TR><TD ALIGN='LEFT'><B>{col} (PK)</B></TD><TD ALIGN='LEFT'>{dtype}</TD></TR>"
-                else:
-                    label += f"<TR><TD ALIGN='LEFT'>{col}</TD><TD ALIGN='LEFT'>{dtype}</TD></TR>"
-            label += "</TABLE>>"
-            graph.node(table, shape="plaintext", label=label)
-        for parent, pk_dict in relationships.items():
-            for pk, child_data in pk_dict.items():
-                for child_table, fk_col, relation_type in child_data:
-                    graph.edge(parent, child_table, label=f"{relation_type}\n{fk_col}", color="blue")
-        svg_data = graph.pipe(format="svg").decode('utf-8')
+#         graph = graphviz.Digraph(format="svg")
+#         graph.attr(rankdir="LR", size="12")
+#         for table, df in table_data_dict.items():
+#             label = f"<<TABLE BORDER='1' CELLBORDER='1' CELLSPACING='0'>"
+#             label += f"<TR><TD BGCOLOR='lightblue' COLSPAN='2'><B>{table}</B></TD></TR>"
+#             for col in df.columns:
+#                 dtype = str(df[col].dtype)
+#                 check_pk = final_primary_keys.get(table, [])
+#                 if len(check_pk) > 0 and isinstance(check_pk[0], tuple):
+#                     check_pk = check_pk[0]
+#                 if col in check_pk:
+#                     label += f"<TR><TD ALIGN='LEFT'><B>{col} (PK)</B></TD><TD ALIGN='LEFT'>{dtype}</TD></TR>"
+#                 else:
+#                     label += f"<TR><TD ALIGN='LEFT'>{col}</TD><TD ALIGN='LEFT'>{dtype}</TD></TR>"
+#             label += "</TABLE>>"
+#             graph.node(table, shape="plaintext", label=label)
+#         for parent, pk_dict in relationships.items():
+#             for pk, child_data in pk_dict.items():
+#                 for child_table, fk_col, relation_type in child_data:
+#                     graph.edge(parent, child_table, label=f"{relation_type}\n{fk_col}", color="blue")
+#         svg_data = graph.pipe(format="svg").decode('utf-8')
 
-        relationship_display = []
-        for parent, pk_dict in relationships.items():
-            for pk, child_data in pk_dict.items():
-                for child_table, fk_col, relation_type in child_data:
-                    rel_id = f"{parent}|{pk}|{child_table}|{fk_col}|{relation_type}"
-                    relationship_display.append({
-                        "parent": parent,
-                        "primaryKey": pk,
-                        "childTable": child_table,
-                        "foreignKey": fk_col,
-                        "relationType": relation_type,
-                        "displayText": f"{parent} ({pk}) → {child_table} ({fk_col}) as ({relation_type})",
-                        "id": rel_id
-                    })
+#         relationship_display = []
+#         for parent, pk_dict in relationships.items():
+#             for pk, child_data in pk_dict.items():
+#                 for child_table, fk_col, relation_type in child_data:
+#                     rel_id = f"{parent}|{pk}|{child_table}|{fk_col}|{relation_type}"
+#                     relationship_display.append({
+#                         "parent": parent,
+#                         "primaryKey": pk,
+#                         "childTable": child_table,
+#                         "foreignKey": fk_col,
+#                         "relationType": relation_type,
+#                         "displayText": f"{parent} ({pk}) → {child_table} ({fk_col}) as ({relation_type})",
+#                         "id": rel_id
+#                     })
 
-        all_rel_options = []
-        for parent, pk_dict in relationships.items():
-            for pk, child_data in pk_dict.items():
-                for child_table, fk_col, rel_type in child_data:
-                    rel_id = f"{parent}|{pk}|{child_table}|{fk_col}|{rel_type}"
-                    all_rel_options.append({
-                        "label": f"{parent} ({pk}) → {child_table} ({fk_col}) as ({rel_type})",
-                        "value": f"{parent} ({pk}) → {child_table} ({fk_col}) as ({rel_type})",
-                        "id": rel_id
-                    })
+#         all_rel_options = []
+#         for parent, pk_dict in relationships.items():
+#             for pk, child_data in pk_dict.items():
+#                 for child_table, fk_col, rel_type in child_data:
+#                     rel_id = f"{parent}|{pk}|{child_table}|{fk_col}|{rel_type}"
+#                     all_rel_options.append({
+#                         "label": f"{parent} ({pk}) → {child_table} ({fk_col}) as ({rel_type})",
+#                         "value": f"{parent} ({pk}) → {child_table} ({fk_col}) as ({rel_type})",
+#                         "id": rel_id
+#                     })
 
-        return StandardResponse(
-            success=True,
-            data={
-                "svg": svg_data,
-                "relationships": relationship_display,
-                "allRelationshipOptions": all_rel_options
-            },
-            message="Relationship removed successfully"
-        )
+#         return StandardResponse(
+#             success=True,
+#             data={
+#                 "svg": svg_data,
+#                 "relationships": relationship_display,
+#                 "allRelationshipOptions": all_rel_options
+#             },
+#             message="Relationship removed successfully"
+#         )
 
-    except Exception as e:
-        return StandardResponse(success=False, status_code=500, message=f"Failed to remove relationship: {str(e)}", data={})
+#     except Exception as e:
+#         return StandardResponse(success=False, status_code=500, message=f"Failed to remove relationship: {str(e)}", data={})
 
-@router.post("/db_disconnect", response_model=StandardResponse)
-async def db_disconnect(
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    try:
-        userserverdetails = db.query(UserServerDetails).filter(
-            UserServerDetails.user_id == current_user["user_id"],
-            UserServerDetails.is_active == True
-        ).first()
+# @router.post("/db_disconnect", response_model=StandardResponse)
+# async def db_disconnect(
+#     current_user: dict = Depends(get_current_user),
+#     db: Session = Depends(get_db)
+# ):
+#     try:
+#         userserverdetails = db.query(UserServerDetails).filter(
+#             UserServerDetails.user_id == current_user["user_id"],
+#             UserServerDetails.is_active == True
+#         ).first()
 
-        if userserverdetails:
-            # Delete DuckDB file
-            if userserverdetails.encrypted_duckdb_path:
-                encrypted_path = decrypt_data(userserverdetails.encrypted_duckdb_path)
-                if path.exists(encrypted_path):
-                    remove(encrypted_path)
-                duckdb_path = encrypted_path.replace(".enc", "")
-                if path.exists(duckdb_path):
-                    remove(duckdb_path)
-            userserverdetails.is_active = False
-            db.commit()
-            logging.info(f"Connection closed for user_id: {current_user['user_id']}")
+#         if userserverdetails:
+#             # Delete DuckDB file
+#             if userserverdetails.encrypted_duckdb_path:
+#                 encrypted_path = decrypt_data(userserverdetails.encrypted_duckdb_path)
+#                 if path.exists(encrypted_path):
+#                     remove(encrypted_path)
+#                 duckdb_path = encrypted_path.replace(".enc", "")
+#                 if path.exists(duckdb_path):
+#                     remove(duckdb_path)
+#             userserverdetails.is_active = False
+#             db.commit()
+#             logging.info(f"Connection closed for user_id: {current_user['user_id']}")
 
-        return StandardResponse(success=True, data={}, message="Disconnected successfully")
+#         return StandardResponse(success=True, data={}, message="Disconnected successfully")
 
-    except SQLAlchemyError as db_error:
-        db.rollback()
-        return StandardResponse(success=False, status_code=500, message=f"Database error: {str(db_error)}", data={})
-    except Exception as e:
-        return StandardResponse(success=False, status_code=500, message=f"Internal server error: {str(e)}", data={})
+#     except SQLAlchemyError as db_error:
+#         db.rollback()
+#         return StandardResponse(success=False, status_code=500, message=f"Database error: {str(db_error)}", data={})
+#     except Exception as e:
+#         return StandardResponse(success=False, status_code=500, message=f"Internal server error: {str(e)}", data={})
